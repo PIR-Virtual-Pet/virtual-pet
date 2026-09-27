@@ -54,7 +54,9 @@ def test_actions_change_pet_stats(
         (" \t\n", ValueError),
     ],
 )
-def test_invalid_name_is_rejected(name: object, expected_error: type[Exception]) -> None:
+def test_invalid_name_is_rejected(
+    name: object, expected_error: type[Exception]
+) -> None:
     """Имя должно быть непустой строкой."""
     with pytest.raises(expected_error):
         Pet(name, 10)  # type: ignore[arg-type]
@@ -70,7 +72,9 @@ def test_invalid_name_is_rejected(name: object, expected_error: type[Exception])
         (-1, ValueError),
     ],
 )
-def test_invalid_life_is_rejected(life: object, expected_error: type[Exception]) -> None:
+def test_invalid_life_is_rejected(
+    life: object, expected_error: type[Exception]
+) -> None:
     """Жизнь должна быть положительным целым числом, но не bool."""
     with pytest.raises(expected_error):
         Pet("Барсик", life)  # type: ignore[arg-type]
