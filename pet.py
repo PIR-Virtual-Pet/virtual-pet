@@ -47,7 +47,9 @@ class Pet:
         а не новые значения показателей. Исчезнувший питомец не меняется.
         """
         if not self.is_alive:
-            raise RuntimeError(f"Питомец {self.name} исчез и больше не может действовать.")
+            raise RuntimeError(
+                f"Питомец {self.name} исчез и больше не может действовать."
+            )
 
         self.happiness += happiness_change
         self.hunger += hunger_change

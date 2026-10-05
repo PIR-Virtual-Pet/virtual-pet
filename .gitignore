@@ -28,3 +28,7 @@ __pycache__/
 *.py[cod]
 .venv/
 .idea/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
