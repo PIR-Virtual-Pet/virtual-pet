@@ -1,195 +1,310 @@
-import json
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+"""FastAPI-сервер виртуального питомца.
+
+Запуск: python -m uvicorn server:app --host 127.0.0.1 --port 8008
+"""
+
+from typing import Annotated, Literal, NoReturn
+
+from fastapi import FastAPI, HTTPException, Path, Request, Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.openapi.utils import get_openapi
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
 
 from pet import Pet
 
 API_PREFIX = "/api/v1"
-ACTIONS = ("feed", "stroke", "give_treat", "walk", "ignore")
+ActionName = Literal["feed", "stroke", "give_treat", "walk", "ignore"]
+
+app = FastAPI(title="Virtual pet API")
 
 PETS: dict[int, Pet] = {}
 NEXT_PET_ID = 0
 
 
+class PetCreate(BaseModel):
+    """Тело запроса на создание питомца."""
+
+    model_config = ConfigDict(strict=True)
+
+    name: str = Field(min_length=1, description="Кличка питомца")
+    life: int = Field(gt=0, description="Начальная жизнь, целое число больше нуля")
+
+
+class PetActionRequest(BaseModel):
+    """Тело запроса на действие."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {"action": "feed"},
+                {"action": "walk"},
+                {"action": "ignore"},
+            ]
+        }
+    )
+
+    action: ActionName = Field(
+        description="Действие: feed, stroke, give_treat, walk, ignore"
+    )
+
+
+class PetOut(BaseModel):
+    """Представление питомца в ответах сервера."""
+
+    id: int = Field(description="Идентификатор питомца")
+    name: str = Field(description="Кличка питомца")
+    life: int = Field(description="Текущая жизнь")
+    happiness: int = Field(description="Текущее счастье")
+    hunger: int = Field(description="Текущий голод")
+    is_alive: bool = Field(description="false, если питомец исчез")
+
+
+class PetActionOut(PetOut):
+    """Представление питомца после выполненного действия."""
+
+    action: ActionName = Field(description="Выполненное действие")
+
+
+class ErrorDetail(BaseModel):
+    """Детали ошибки API."""
+
+    code: str = Field(description="Машиночитаемый код ошибки")
+    message: str = Field(description="Текст ошибки для отладки")
+
+
+class ErrorOut(BaseModel):
+    """Ответ сервера при ошибке."""
+
+    error: ErrorDetail
+
+
 def pet_view(pet_id: int, pet: Pet) -> dict[str, str | int | bool]:
+    """Собрать представление питомца для ответа сервера."""
     return {"id": pet_id, **pet.get_stats()}
 
 
-def parse_pet_id(raw_id: str) -> int | None:
-    try:
-        pet_id = int(raw_id)
-    except ValueError:
-        return None
-    return pet_id if pet_id > 0 else None
+def error_response(status_code: int, code: str, message: str) -> JSONResponse:
+    """Вернуть ошибку в едином формате API."""
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": {"code": code, "message": message}},
+    )
 
 
-def path_parts(path: str) -> list[str]:
-    return [part for part in urlparse(path).path.split("/") if part]
+def fail(status_code: int, code: str, message: str) -> NoReturn:
+    """Бросить HTTPException с деталями ошибки для общего обработчика."""
+    raise HTTPException(
+        status_code=status_code,
+        detail={"code": code, "message": message},
+    )
 
 
-class VirtualPetHandler(BaseHTTPRequestHandler):
-    protocol_version = "HTTP/1.1"
-
-    def do_GET(self) -> None:
-        parts = path_parts(self.path)
-
-        if parts == ["api", "v1", "pets"]:
-            self._list_pets()
-        elif len(parts) == 4 and parts[:3] == ["api", "v1", "pets"]:
-            self._get_pet(parts[3])
-        else:
-            self._send_api_error(404, "PET_NOT_FOUND", "Ресурс не найден.")
-
-    def do_POST(self) -> None:
-        data = self._read_json_body()
-        parts = path_parts(self.path)
-
-        if parts == ["api", "v1", "pets"]:
-            self._create_pet(data)
-        elif (
-            len(parts) == 5
-            and parts[:3] == ["api", "v1", "pets"]
-            and parts[4] == "actions"
-        ):
-            self._perform_action(parts[3], data)
-        else:
-            self._send_api_error(404, "PET_NOT_FOUND", "Ресурс не найден.")
-
-    def do_DELETE(self) -> None:
-        parts = path_parts(self.path)
-
-        if len(parts) == 4 and parts[:3] == ["api", "v1", "pets"]:
-            self._delete_pet(parts[3])
-        else:
-            self._send_api_error(404, "PET_NOT_FOUND", "Ресурс не найден.")
-
-    def _read_json_body(self) -> object:
-        length = int(self.headers.get("Content-Length", 0))
-        raw = self.rfile.read(length) if length > 0 else b""
-        if not raw:
-            return None
-        try:
-            return json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            return None
-
-    def _send_json(
-        self,
-        data: object,
-        status: int = 200,
-        headers: dict[str, str] | None = None,
-    ) -> None:
-        payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(payload)))
-        for name, value in (headers or {}).items():
-            self.send_header(name, value)
-        self.end_headers()
-        self.wfile.write(payload)
-
-    def _send_api_error(self, status: int, code: str, message: str) -> None:
-        body = {"error": {"code": code, "message": message}}
-        self._send_json(body, status)
-
-    def _send_no_content(self) -> None:
-        self.send_response(204)
-        self.send_header("Content-Length", "0")
-        self.end_headers()
-
-    def _find_pet(self, raw_id: str) -> tuple[int, Pet] | None:
-        pet_id = parse_pet_id(raw_id)
-        if pet_id is None:
-            return None
-        pet = PETS.get(pet_id)
-        if pet is None:
-            return None
-        return pet_id, pet
-
-    def _list_pets(self) -> None:
-        self._send_json([pet_view(pet_id, pet) for pet_id, pet in PETS.items()])
-
-    def _create_pet(self, data: object) -> None:
-        global NEXT_PET_ID
-
-        if not isinstance(data, dict):
-            message = "Тело запроса должно быть JSON-объектом."
-            self._send_api_error(400, "VALIDATION_ERROR", message)
-            return
-
-        try:
-            pet = Pet(data.get("name"), data.get("life"))
-        except (TypeError, ValueError) as error:
-            self._send_api_error(400, "VALIDATION_ERROR", str(error))
-            return
-
-        NEXT_PET_ID += 1
-        PETS[NEXT_PET_ID] = pet
-        self._send_json(
-            pet_view(NEXT_PET_ID, pet),
-            201,
-            {"Location": f"{API_PREFIX}/pets/{NEXT_PET_ID}"},
+@app.exception_handler(HTTPException)
+async def http_error_handler(request: Request, error: HTTPException) -> JSONResponse:
+    """HTTPException в формате error/code/message."""
+    if isinstance(error.detail, dict) and "code" in error.detail:
+        return JSONResponse(
+            status_code=error.status_code,
+            content={"error": error.detail},
         )
 
-    def _get_pet(self, raw_id: str) -> None:
-        found = self._find_pet(raw_id)
-        if found is None:
-            self._send_api_error(
-                404, "PET_NOT_FOUND", "Питомец с указанным id не найден."
-            )
-            return
-
-        pet_id, pet = found
-        self._send_json(pet_view(pet_id, pet))
-
-    def _perform_action(self, raw_id: str, data: object) -> None:
-        found = self._find_pet(raw_id)
-        if found is None:
-            self._send_api_error(
-                404, "PET_NOT_FOUND", "Питомец с указанным id не найден."
-            )
-            return
-
-        pet_id, pet = found
-        action = data.get("action") if isinstance(data, dict) else None
-
-        if action not in ACTIONS:
-            message = f"Неизвестное действие: {action}."
-            self._send_api_error(400, "UNKNOWN_ACTION", message)
-            return
-
-        try:
-            getattr(pet, action)()
-        except RuntimeError as error:
-            self._send_api_error(409, "PET_IS_GONE", str(error))
-            return
-
-        view = pet_view(pet_id, pet)
-        view["action"] = action
-        self._send_json(view)
-
-    def _delete_pet(self, raw_id: str) -> None:
-        found = self._find_pet(raw_id)
-        if found is None:
-            self._send_api_error(
-                404, "PET_NOT_FOUND", "Питомец с указанным id не найден."
-            )
-            return
-
-        pet_id, _ = found
-        del PETS[pet_id]
-        self._send_no_content()
+    code = "PET_NOT_FOUND" if error.status_code == 404 else "VALIDATION_ERROR"
+    return error_response(error.status_code, code, str(error.detail))
 
 
-def run(host: str = "127.0.0.1", port: int = 8008) -> None:
-    print(f"Serving on http://{host}:{port}")
-    server = ThreadingHTTPServer((host, port), VirtualPetHandler)
+@app.exception_handler(404)
+async def not_found_handler(request: Request, error: Exception) -> JSONResponse:
+    """404 в едином формате для неизвестных данных."""
+    detail = getattr(error, "detail", None)
+    if isinstance(detail, dict) and "code" in detail:
+        return JSONResponse(status_code=404, content={"error": detail})
+    return error_response(404, "PET_NOT_FOUND", "Ресурс не найден.")
+
+
+def validation_message(error: RequestValidationError) -> str:
+    """Понятное сообщение об ошибке валидации."""
+    for item in error.errors():
+        location = [str(part) for part in item["loc"]]
+        field = location[-1] if location else ""
+        if field == "name":
+            return "Имя должно быть непустой строкой."
+        if field == "life":
+            if item.get("type") == "greater_than":
+                return "Начальная жизнь должна быть больше нуля."
+            return "Начальная жизнь должна быть целым числом больше нуля."
+    return "Некорректные данные запроса."
+
+
+def action_validation_message(error: RequestValidationError) -> str:
+    """Сообщение для некорректного action."""
+    for item in error.errors():
+        location = [str(part) for part in item["loc"]]
+        if "action" not in location:
+            continue
+        if item.get("type") == "missing":
+            return "Поле action отсутствует."
+        return f"Неизвестное действие: {item.get('input')}."
+    return "Поле action отсутствует или содержит неизвестное значение."
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(
+    request: Request, error: RequestValidationError
+) -> JSONResponse:
+    """Преобразование ошибок Pydantic в формат API."""
+    fields = {str(part) for item in error.errors() for part in item["loc"]}
+    if "pet_id" in fields:
+        return error_response(404, "PET_NOT_FOUND", "Питомец с указанным id не найден.")
+
+    if request.url.path.endswith("/actions"):
+        return error_response(400, "UNKNOWN_ACTION", action_validation_message(error))
+
+    return error_response(400, "VALIDATION_ERROR", validation_message(error))
+
+
+@app.post(
+    "/api/v1/pets",
+    status_code=201,
+    response_model=PetOut,
+    summary="Создать питомца",
+    responses={
+        400: {
+            "model": ErrorOut,
+            "description": "VALIDATION_ERROR — некорректные name или life",
+        }
+    },
+)
+def create_pet(data: PetCreate, response: Response) -> dict[str, str | int | bool]:
+    """Создать питомца и вернуть его стартовое состояние."""
+    global NEXT_PET_ID
+
     try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("Shutting down...")
-        server.server_close()
+        pet = Pet(data.name, data.life)
+    except (TypeError, ValueError) as error:
+        fail(400, "VALIDATION_ERROR", str(error))
+
+    NEXT_PET_ID += 1
+    PETS[NEXT_PET_ID] = pet
+    response.headers["Location"] = f"{API_PREFIX}/pets/{NEXT_PET_ID}"
+    return pet_view(NEXT_PET_ID, pet)
 
 
-if __name__ == "__main__":
-    run()
+@app.get(
+    "/api/v1/pets",
+    response_model=list[PetOut],
+    summary="Список питомцев",
+)
+def list_pets() -> list[dict[str, str | int | bool]]:
+    """Вернуть всех питомцев, включая исчезнувших."""
+    return [pet_view(pet_id, pet) for pet_id, pet in PETS.items()]
+
+
+@app.get(
+    "/api/v1/pets/{pet_id}",
+    response_model=PetOut,
+    summary="Статистика питомца",
+    responses={
+        404: {
+            "model": ErrorOut,
+            "description": "PET_NOT_FOUND — питомец не найден",
+        }
+    },
+)
+def get_pet(
+    pet_id: Annotated[int, Path(description="Идентификатор питомца")],
+) -> dict[str, str | int | bool]:
+    """Вернуть статистику питомца по его идентификатору."""
+    pet = PETS.get(pet_id)
+    if pet is None:
+        fail(404, "PET_NOT_FOUND", "Питомец с указанным id не найден.")
+    return pet_view(pet_id, pet)
+
+
+@app.post(
+    "/api/v1/pets/{pet_id}/actions",
+    response_model=PetActionOut,
+    summary="Выполнить действие над питомцем",
+    description=(
+        "Доступные действия: `feed` — покормить, `stroke` — погладить, "
+        "`give_treat` — дать вкусняшку, `walk` — погулять, `ignore` — игнорировать."
+    ),
+    responses={
+        400: {
+            "model": ErrorOut,
+            "description": "UNKNOWN_ACTION — неизвестное или отсутствующее действие",
+        },
+        404: {
+            "model": ErrorOut,
+            "description": "PET_NOT_FOUND — питомец не найден",
+        },
+        409: {
+            "model": ErrorOut,
+            "description": "PET_IS_GONE — питомец уже исчез",
+        },
+    },
+)
+def perform_action(
+    pet_id: Annotated[int, Path(description="Идентификатор питомца")],
+    data: PetActionRequest,
+) -> dict[str, str | int | bool]:
+    """Выполнить действие над питомцем и вернуть итоговую статистику."""
+    pet = PETS.get(pet_id)
+    if pet is None:
+        fail(404, "PET_NOT_FOUND", "Питомец с указанным id не найден.")
+
+    action = data.action
+    try:
+        getattr(pet, action)()
+    except RuntimeError as error:
+        fail(409, "PET_IS_GONE", str(error))
+
+    return {**pet_view(pet_id, pet), "action": action}
+
+
+@app.delete(
+    "/api/v1/pets/{pet_id}",
+    status_code=204,
+    summary="Удалить питомца",
+    responses={
+        404: {
+            "model": ErrorOut,
+            "description": "PET_NOT_FOUND — питомец не найден",
+        }
+    },
+)
+def delete_pet(
+    pet_id: Annotated[int, Path(description="Идентификатор питомца")],
+) -> Response:
+    """Удалить питомца из коллекции сервера."""
+    if pet_id not in PETS:
+        fail(404, "PET_NOT_FOUND", "Питомец с указанным id не найден.")
+
+    del PETS[pet_id]
+    return Response(status_code=204)
+
+
+def custom_openapi() -> dict[str, object]:
+    if app.openapi_schema is not None:
+        return app.openapi_schema
+
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+    for path_item in schema.get("paths", {}).values():
+        for operation in path_item.values():
+            if isinstance(operation, dict):
+                operation.get("responses", {}).pop("422", None)
+
+    schemas = schema.get("components", {}).get("schemas", {})
+    schemas.pop("HTTPValidationError", None)
+    schemas.pop("ValidationError", None)
+
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = custom_openapi
