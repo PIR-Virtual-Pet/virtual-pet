@@ -1,0 +1,367 @@
+openapi: 3.0.3
+info:
+  title: Virtual Pet API
+  description: RESTful API виртуального питомца. Сервер принимает HTTP-запросы, вызывает методы доменного класса Pet и возвращает статистику питомца. Игровые правила остаются в доменной модели.
+  version: 1.0.0
+servers:
+- url: http://localhost:8008
+  description: Локальный сервер
+tags:
+- name: Pets
+  description: Создание питомцев, просмотр статистики и действия.
+paths:
+  /api/v1/pets:
+    get:
+      tags:
+      - Pets
+      summary: Получить список питомцев
+      description: Возвращает всех питомцев, включая исчезнувших. Если питомцев нет, возвращается пустой массив.
+      operationId: listPets
+      responses:
+        '200':
+          description: Список питомцев (может быть пустым).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Pet'
+              examples:
+                twoPets:
+                  summary: Два питомца
+                  value:
+                  - id: 1
+                    name: Барсик
+                    life: 8
+                    happiness: 3
+                    hunger: 1
+                    is_alive: true
+                  - id: 2
+                    name: Рекс
+                    life: 10
+                    happiness: 2
+                    hunger: 2
+                    is_alive: true
+                empty:
+                  summary: Питомцев нет
+                  value: []
+    post:
+      tags:
+      - Pets
+      summary: Создать питомца
+      description: Принимает кличку и начальную жизнь. Счастье и голод устанавливаются доменной моделью в значение 2.
+      operationId: createPet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PetCreate'
+            examples:
+              barsik:
+                summary: Новый питомец
+                value:
+                  name: Барсик
+                  life: 10
+      responses:
+        '201':
+          description: Питомец создан.
+          headers:
+            Location:
+              description: URL созданного питомца.
+              schema:
+                type: string
+                example: /api/v1/pets/1
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pet'
+              examples:
+                created:
+                  summary: Созданный питомец
+                  value:
+                    id: 1
+                    name: Барсик
+                    life: 10
+                    happiness: 2
+                    hunger: 2
+                    is_alive: true
+        '400':
+          $ref: '#/components/responses/ValidationError'
+  /api/v1/pets/{id}:
+    parameters:
+    - $ref: '#/components/parameters/PetId'
+    get:
+      tags:
+      - Pets
+      summary: Получить статистику питомца
+      description: 'Возвращает текущую статистику. Работает и для исчезнувшего питомца: в этом случае is_alive равно false.'
+      operationId: getPet
+      responses:
+        '200':
+          description: Статистика питомца.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pet'
+              examples:
+                pet:
+                  summary: Питомец после нескольких действий
+                  value:
+                    id: 1
+                    name: Барсик
+                    life: 8
+                    happiness: 3
+                    hunger: 1
+                    is_alive: true
+        '404':
+          $ref: '#/components/responses/PetNotFound'
+    delete:
+      tags:
+      - Pets
+      summary: Удалить питомца
+      description: Удаляет питомца из коллекции сервера. Применимо и к живому, и к исчезнувшему питомцу.
+      operationId: deletePet
+      responses:
+        '204':
+          description: Питомец удалён, тело ответа отсутствует.
+        '404':
+          $ref: '#/components/responses/PetNotFound'
+  /api/v1/pets/{id}/actions:
+    post:
+      tags:
+      - Pets
+      summary: Выполнить действие над питомцем
+      description: Создаёт действие над питомцем. Вид действия передаётся в поле action. Сервер вызывает соответствующий метод Pet и возвращает итоговую статистику.
+      operationId: performPetAction
+      parameters:
+      - $ref: '#/components/parameters/PetId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PetActionRequest'
+            examples:
+              walk:
+                summary: Погулять с питомцем
+                value:
+                  action: walk
+              feed:
+                summary: Покормить питомца
+                value:
+                  action: feed
+      responses:
+        '200':
+          description: Действие выполнено. Возвращается итоговая статистика и поле action.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PetActionResponse'
+              examples:
+                walk:
+                  summary: Результат действия walk
+                  value:
+                    id: 1
+                    name: Барсик
+                    life: 8
+                    happiness: 4
+                    hunger: 4
+                    is_alive: true
+                    action: walk
+                feed:
+                  summary: Результат действия feed
+                  value:
+                    id: 1
+                    name: Барсик
+                    life: 8
+                    happiness: 4
+                    hunger: 2
+                    is_alive: true
+                    action: feed
+        '400':
+          $ref: '#/components/responses/UnknownAction'
+        '404':
+          $ref: '#/components/responses/PetNotFound'
+        '409':
+          $ref: '#/components/responses/PetIsGone'
+components:
+  parameters:
+    PetId:
+      name: id
+      in: path
+      required: true
+      description: Целочисленный идентификатор питомца.
+      schema:
+        type: integer
+        minimum: 1
+        example: 1
+  responses:
+    ValidationError:
+      description: Некорректные name или life.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            invalidName:
+              summary: Пустая кличка
+              value:
+                error:
+                  code: VALIDATION_ERROR
+                  message: Имя не должно быть пустым.
+            invalidLife:
+              summary: Неверная жизнь
+              value:
+                error:
+                  code: VALIDATION_ERROR
+                  message: Начальная жизнь должна быть больше нуля.
+    UnknownAction:
+      description: Поле action отсутствует или содержит неизвестное значение.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            unknownAction:
+              summary: Неизвестное действие
+              value:
+                error:
+                  code: UNKNOWN_ACTION
+                  message: 'Неизвестное действие: sleep.'
+    PetNotFound:
+      description: Питомец с указанным id не найден.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            notFound:
+              summary: Питомец не найден
+              value:
+                error:
+                  code: PET_NOT_FOUND
+                  message: Питомец с указанным id не найден.
+    PetIsGone:
+      description: Питомец уже исчез и не может действовать.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            gone:
+              summary: Питомец исчез
+              value:
+                error:
+                  code: PET_IS_GONE
+                  message: Питомец Барсик исчез и больше не может действовать.
+  schemas:
+    PetCreate:
+      type: object
+      required:
+      - name
+      - life
+      properties:
+        name:
+          type: string
+          minLength: 1
+          description: Кличка питомца. Пробелы по краям обрезаются; пустая строка недопустима.
+          example: Барсик
+        life:
+          type: integer
+          minimum: 1
+          description: Начальная жизнь, целое число больше нуля.
+          example: 10
+    Pet:
+      type: object
+      required:
+      - id
+      - name
+      - life
+      - happiness
+      - hunger
+      - is_alive
+      properties:
+        id:
+          type: integer
+          minimum: 1
+          description: Идентификатор, присвоенный сервером.
+          example: 1
+        name:
+          type: string
+          minLength: 1
+          description: Кличка питомца.
+          example: Барсик
+        life:
+          type: integer
+          minimum: 0
+          description: Текущая жизнь; не бывает меньше нуля.
+          example: 8
+        happiness:
+          type: integer
+          description: Текущее счастье.
+          example: 3
+        hunger:
+          type: integer
+          description: Текущий голод; может быть отрицательным.
+          example: 1
+        is_alive:
+          type: boolean
+          description: false, если питомец исчез.
+          example: true
+    PetActionRequest:
+      type: object
+      required:
+      - action
+      properties:
+        action:
+          type: string
+          description: Действие над питомцем.
+          enum:
+          - feed
+          - stroke
+          - give_treat
+          - walk
+          - ignore
+          example: walk
+    PetActionResponse:
+      allOf:
+      - $ref: '#/components/schemas/Pet'
+      - type: object
+        required:
+        - action
+        properties:
+          action:
+            type: string
+            description: Выполненное действие.
+            enum:
+            - feed
+            - stroke
+            - give_treat
+            - walk
+            - ignore
+            example: walk
+    Error:
+      type: object
+      required:
+      - error
+      properties:
+        error:
+          type: object
+          required:
+          - code
+          - message
+          properties:
+            code:
+              type: string
+              description: Машиночитаемый код ошибки.
+              enum:
+              - VALIDATION_ERROR
+              - UNKNOWN_ACTION
+              - PET_NOT_FOUND
+              - PET_IS_GONE
+              example: PET_NOT_FOUND
+            message:
+              type: string
+              description: Текст ошибки для отладки.
+              example: Питомец с указанным id не найден.
