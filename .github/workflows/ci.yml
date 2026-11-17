@@ -28,6 +28,59 @@ jobs:
       - name: Run tests with coverage
         run: pytest
 
+  postman:
+    name: API tests (Postman / Newman)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Newman
+        run: npm install --global newman@6
+
+      - name: Run Postman collection
+        run: |
+          python -m uvicorn server:app --host 127.0.0.1 --port 8008 &
+          SERVER_PID=$!
+          trap "kill $SERVER_PID" EXIT
+          for _ in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:8008/api/v1/pets > /dev/null; then
+              break
+            fi
+            sleep 0.5
+          done
+          newman run postman/virtual-pet.postman_collection.json \
+            --environment postman/local.postman_environment.json \
+            --env-var "baseUrl=http://127.0.0.1:8008" \
+            --reporters cli,junit \
+            --reporter-junit-export newman-results/junit.xml
+
+      - name: Upload Newman report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: newman-report
+          path: newman-results/
+          if-no-files-found: ignore
+
   lint:
     name: Lint (PEP 8)
     runs-on: ubuntu-latest
