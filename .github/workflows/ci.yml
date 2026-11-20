@@ -28,9 +28,29 @@ jobs:
       - name: Run tests with coverage
         run: pytest
 
+      - name: Check min coverage for pet.py
+        run: python -m coverage report --include="domain/pet.py" --fail-under=100
+
   postman:
     name: API tests (Postman / Newman)
     runs-on: ubuntu-latest
+
+    env:
+      MONGO_URI: mongodb://root:root_password@localhost:27017/virtual_pet?authSource=admin
+
+    services:
+      mongodb:
+        image: mongo:8.0
+        ports:
+          - 27017:27017
+        env:
+          MONGO_INITDB_ROOT_USERNAME: root
+          MONGO_INITDB_ROOT_PASSWORD: root_password
+        options: >-
+          --health-cmd "mongosh --quiet -u root -p root_password --authenticationDatabase admin --eval 'quit(db.adminCommand({ ping: 1 }).ok ? 0 : 1)'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
 
     steps:
       - name: Checkout code

@@ -1,4 +1,4 @@
-from pet import Pet
+from domain.pet import Pet
 
 pet = Pet("Барсик", 10)
 print(pet.get_stats())
