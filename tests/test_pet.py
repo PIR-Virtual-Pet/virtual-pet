@@ -2,7 +2,7 @@
 
 import pytest
 
-from pet import Pet
+from domain.pet import Pet
 
 
 def test_initial_state() -> None:

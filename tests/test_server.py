@@ -1,23 +1,25 @@
 """Тесты FastAPI-сервера через TestClient, без внешнего HTTP-сервера."""
 
 import httpx
+import mongomock
 import pytest
 from fastapi.testclient import TestClient
 
 import server
+from pet_repository import MongoPetRepository
 
 API_URL = "/api/v1"
 
 
 @pytest.fixture()
 def client() -> TestClient:
-    """Вернуть клиент FastAPI с чистым состоянием хранилища."""
-    server.PETS.clear()
-    server.NEXT_PET_ID = 0
+    """Вернуть клиент FastAPI с MongoDB, замоканной через mongomock."""
+    database = mongomock.MongoClient()["virtual_pet"]
+    repository = MongoPetRepository(database)
+    server.app.dependency_overrides[server.get_repository] = lambda: repository
     with TestClient(server.app) as api_client:
         yield api_client
-    server.PETS.clear()
-    server.NEXT_PET_ID = 0
+    server.app.dependency_overrides.clear()
 
 
 def expected_state(

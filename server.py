@@ -5,21 +5,29 @@
 
 from typing import Annotated, Literal, NoReturn
 
-from fastapi import FastAPI, HTTPException, Path, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Path, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from pet import Pet
+from config import API_PREFIX
+from domain.pet import Pet
+from pet_repository import MongoPetRepository
 
-API_PREFIX = "/api/v1"
 ActionName = Literal["feed", "stroke", "give_treat", "walk", "ignore"]
 
 app = FastAPI(title="Virtual pet API")
 
-PETS: dict[int, Pet] = {}
-NEXT_PET_ID = 0
+_repository: MongoPetRepository | None = None
+
+
+def get_repository() -> MongoPetRepository:
+    """Вернуть репозиторий MongoDB, создав подключение при первом запросе."""
+    global _repository
+    if _repository is None:
+        _repository = MongoPetRepository.connect()
+    return _repository
 
 
 class PetCreate(BaseModel):
@@ -175,19 +183,19 @@ async def validation_error_handler(
         }
     },
 )
-def create_pet(data: PetCreate, response: Response) -> dict[str, str | int | bool]:
+def create_pet(
+    data: PetCreate,
+    response: Response,
+    repository: Annotated[MongoPetRepository, Depends(get_repository)],
+) -> dict[str, str | int | bool]:
     """Создать питомца и вернуть его стартовое состояние."""
-    global NEXT_PET_ID
-
     try:
-        pet = Pet(data.name, data.life)
+        pet_id, pet = repository.create(data.name, data.life)
     except (TypeError, ValueError) as error:
         fail(400, "VALIDATION_ERROR", str(error))
 
-    NEXT_PET_ID += 1
-    PETS[NEXT_PET_ID] = pet
-    response.headers["Location"] = f"{API_PREFIX}/pets/{NEXT_PET_ID}"
-    return pet_view(NEXT_PET_ID, pet)
+    response.headers["Location"] = f"{API_PREFIX}/pets/{pet_id}"
+    return pet_view(pet_id, pet)
 
 
 @app.get(
@@ -195,9 +203,11 @@ def create_pet(data: PetCreate, response: Response) -> dict[str, str | int | boo
     response_model=list[PetOut],
     summary="Список питомцев",
 )
-def list_pets() -> list[dict[str, str | int | bool]]:
+def list_pets(
+    repository: Annotated[MongoPetRepository, Depends(get_repository)],
+) -> list[dict[str, str | int | bool]]:
     """Вернуть всех питомцев, включая исчезнувших."""
-    return [pet_view(pet_id, pet) for pet_id, pet in PETS.items()]
+    return [pet_view(pet_id, pet) for pet_id, pet in repository.list_all()]
 
 
 @app.get(
@@ -213,12 +223,14 @@ def list_pets() -> list[dict[str, str | int | bool]]:
 )
 def get_pet(
     pet_id: Annotated[int, Path(description="Идентификатор питомца")],
+    repository: Annotated[MongoPetRepository, Depends(get_repository)],
 ) -> dict[str, str | int | bool]:
     """Вернуть статистику питомца по его идентификатору."""
-    pet = PETS.get(pet_id)
-    if pet is None:
+    found = repository.get(pet_id)
+    if found is None:
         fail(404, "PET_NOT_FOUND", "Питомец с указанным id не найден.")
-    return pet_view(pet_id, pet)
+    stored_id, pet = found
+    return pet_view(stored_id, pet)
 
 
 @app.post(
@@ -247,19 +259,24 @@ def get_pet(
 def perform_action(
     pet_id: Annotated[int, Path(description="Идентификатор питомца")],
     data: PetActionRequest,
+    repository: Annotated[MongoPetRepository, Depends(get_repository)],
 ) -> dict[str, str | int | bool]:
     """Выполнить действие над питомцем и вернуть итоговую статистику."""
-    pet = PETS.get(pet_id)
-    if pet is None:
+    found = repository.get(pet_id)
+    if found is None:
         fail(404, "PET_NOT_FOUND", "Питомец с указанным id не найден.")
 
+    stored_id, pet = found
     action = data.action
     try:
         getattr(pet, action)()
     except RuntimeError as error:
         fail(409, "PET_IS_GONE", str(error))
 
-    return {**pet_view(pet_id, pet), "action": action}
+    if not repository.save(stored_id, pet):
+        raise RuntimeError("Не удалось сохранить состояние питомца.")
+
+    return {**pet_view(stored_id, pet), "action": action}
 
 
 @app.delete(
@@ -275,15 +292,15 @@ def perform_action(
 )
 def delete_pet(
     pet_id: Annotated[int, Path(description="Идентификатор питомца")],
+    repository: Annotated[MongoPetRepository, Depends(get_repository)],
 ) -> Response:
     """Удалить питомца из коллекции сервера."""
-    if pet_id not in PETS:
+    if not repository.delete(pet_id):
         fail(404, "PET_NOT_FOUND", "Питомец с указанным id не найден.")
 
-    del PETS[pet_id]
     return Response(status_code=204)
 
-
+"""Убираем из Swagger отсутствующее в сервере поведение"""
 def custom_openapi() -> dict[str, object]:
     if app.openapi_schema is not None:
         return app.openapi_schema

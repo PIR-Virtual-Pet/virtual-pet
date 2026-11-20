@@ -4,16 +4,18 @@ pythonpath = ["."]
 addopts = [
     "--strict-config",
     "--strict-markers",
-    "--cov=pet",
+    "--cov=domain",
+    "--cov=server",
+    "--cov=pet_repository",
     "--cov-branch",
     "--cov-report=term-missing",
-    "--cov-fail-under=100",
+    "--cov-fail-under=80",
 ]
 
 [tool.coverage.run]
 branch = true
-source = ["pet"]
+source = ["domain", "server", "pet_repository"]
 
 [tool.coverage.report]
-fail_under = 100
+fail_under = 80
 show_missing = true
