@@ -300,8 +300,9 @@ def delete_pet(
 
     return Response(status_code=204)
 
-"""Убираем из Swagger отсутствующее в сервере поведение"""
+
 def custom_openapi() -> dict[str, object]:
+    """Убрать из OpenAPI ответ 422, которого нет в сервере."""
     if app.openapi_schema is not None:
         return app.openapi_schema
 
