@@ -277,22 +277,61 @@ python -m pip install -r requirements-dev.txt
 
 ```bash
 pytest
+python -m coverage report --include="domain/pet.py" --fail-under=100
 ruff check .
 ruff format --check .
 ```
 
-`pytest` запускает тесты доменной логики и HTTP-сервера. Тесты сервера используют
-`TestClient` и не требуют запуска внешнего процесса. Покрытие ветвей `pet.py`
-должно быть 100%. Те же проверки запускаются в GitHub Actions.
+`pytest` запускает тесты доменной логики и HTTP-сервера и проверяет общее покрытие
+не ниже 80%. Тесты сервера используют `TestClient` и `mongomock`, поэтому реальная
+MongoDB для них не нужна. Отдельная проверка требует 100% покрытия ветвей
+`domain/pet.py`. Те же проверки запускаются в GitHub Actions.
 
-## Запуск сервера
+## Запуск
 
 ```bash
+docker compose up -d
 python -m uvicorn server:app --host 127.0.0.1 --port 8008
 ```
 
-Сервер реализован на FastAPI; интерактивная документация доступна по адресу
-`http://127.0.0.1:8008/docs`.
+Сервер реализован на FastAPI и сохраняет питомцев в MongoDB; интерактивная
+документация доступна по адресу `http://127.0.0.1:8008/docs`.
+
+## MongoDB
+
+Контейнер `virtual-pet-mongo` (`mongo:8.0`, порт `27017`, volume
+`virtual_pet_mongo_data`), база `virtual_pet`. Локальные пользователи:
+`root / root_password` и `virtual_pet / virtual_pet_password`. Строка подключения
+приложения:
+
+```text
+mongodb://virtual_pet:virtual_pet_password@localhost:27017/virtual_pet?authSource=virtual_pet
+```
+
+Схема:
+
+- `pets` — `_id` (int, id из API), `name`, `life`, `happiness`, `hunger`,
+  `is_alive`, `last_damage`; `last_damage` нужен для серии штрафов, но в API не
+  отдаётся;
+- `counters` — `_id: "pets"`, `seq`; следующий id выдаётся атомарно через `$inc`;
+- индексы: `_id` нужен сейчас; `pets_name_idx` — задел под будущий поиск.
+  `name` не уникален, текущие запросы этот индекс не используют.
+
+`pet_repository.py` реализует `MongoPetRepository`; сервер получает его через
+`get_repository()` и `Depends`, а после каждого действия сохраняет состояние.
+В pytest используется `mongomock`, в CI для Postman/Newman поднимается отдельный
+сервисный контейнер MongoDB.
+
+Проверка и демонстрация:
+
+```bash
+docker compose ps
+docker exec -it virtual-pet-mongo mongosh "mongodb://virtual_pet:virtual_pet_password@localhost:27017/virtual_pet?authSource=virtual_pet"
+python mongo_main.py
+```
+
+`docker compose down` останавливает базу с сохранением данных, `docker compose down -v`
+удаляет данные.
 
 ## Команда
 
